@@ -18,6 +18,8 @@ Date de mise a jour: 2026-04-10
 - [x] Couches serveur: config, Key Vault, Cosmos DB, Blob Storage
 - [x] API Routes: health, todos CRUD, attachment upload/delete
 - [x] UI Todo: creation, listing, statut, suppression, piece jointe
+- [x] Priorites et statuts enrichis (`todo`, `in_progress`, `blocked`, `done` + `low`, `medium`, `high`)
+- [x] Filtres et tris avances (recherche, filtres statut/priorite, tri multi-criteres)
 - [x] Containerisation de base (Dockerfile multi-stage + output standalone)
 - [x] Infrastructure Bicep + azure.yaml (squelette complet)
 - [x] CI/CD GitHub Actions vers ACR + App Service (pipeline de base)
@@ -173,6 +175,21 @@ Note: en Azure, les secrets doivent etre stockes dans Key Vault et resolves via 
 - `DELETE /api/todos/:id`
 - `POST /api/todos/:id/attachment`
 - `DELETE /api/todos/:id/attachment`
+
+### Champs metier Todo
+
+- `status`: `todo`, `in_progress`, `blocked`, `done`
+- `priority`: `low`, `medium`, `high`
+
+### Filtres et tris UI
+
+L'ecran principal permet de combiner:
+
+- Recherche texte (titre, description, nom de fichier)
+- Filtres par statut et priorite
+- Option "Avec echeance"
+- Option "En retard uniquement"
+- Tri par creation, mise a jour, echeance, priorite, statut, titre
 
 ## Build conteneur
 

@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+import { todoPriorityValues, todoStatusValues } from "@/lib/types";
+
 export const acceptedAttachmentMimeTypes = [
   "image/jpeg",
   "image/png",
@@ -8,6 +10,9 @@ export const acceptedAttachmentMimeTypes = [
 ] as const;
 
 export const maxAttachmentSizeInBytes = 10 * 1024 * 1024;
+
+export const todoStatusSchema = z.enum(todoStatusValues);
+export const todoPrioritySchema = z.enum(todoPriorityValues);
 
 const optionalTrimmedString = z
   .string()
@@ -19,11 +24,14 @@ export const createTodoSchema = z.object({
   title: z.string().trim().min(1, "Le titre est obligatoire").max(120),
   description: optionalTrimmedString,
   dueDate: optionalTrimmedString,
+  status: todoStatusSchema.optional(),
+  priority: todoPrioritySchema.optional(),
 });
 
 export const updateTodoSchema =
   createTodoSchema.partial().extend({
-    status: z.enum(["pending", "done"]).optional(),
+    status: todoStatusSchema.optional(),
+    priority: todoPrioritySchema.optional(),
   });
 
 export const todoIdSchema = z.string().uuid("Identifiant de tache invalide");

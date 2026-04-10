@@ -3,7 +3,7 @@
 import { format } from "date-fns";
 import { fr } from "date-fns/locale";
 import { Loader2, Paperclip, Trash2 } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -13,18 +13,74 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
 import { Textarea } from "@/components/ui/textarea";
-import type { TodoItem } from "@/lib/types";
+import {
+  todoPriorityLabels,
+  todoPriorityValues,
+  todoStatusLabels,
+  todoStatusValues,
+  type TodoItem,
+  type TodoPriority,
+  type TodoStatus,
+} from "@/lib/types";
+
+type TodoSortField = "createdAt" | "updatedAt" | "dueDate" | "priority" | "title" | "status";
+type SortDirection = "asc" | "desc";
+
+const priorityOrder: Record<TodoPriority, number> = {
+  low: 1,
+  medium: 2,
+  high: 3,
+};
+
+const statusOrder: Record<TodoStatus, number> = {
+  todo: 1,
+  in_progress: 2,
+  blocked: 3,
+  done: 4,
+};
+
+function getStatusBadgeClass(status: TodoStatus): string {
+  switch (status) {
+    case "todo":
+      return "bg-slate-100 text-slate-700";
+    case "in_progress":
+      return "bg-sky-100 text-sky-700";
+    case "blocked":
+      return "bg-rose-100 text-rose-700";
+    case "done":
+      return "bg-emerald-100 text-emerald-700";
+    default:
+      return "bg-slate-100 text-slate-700";
+  }
+}
+
+function getPriorityBadgeClass(priority: TodoPriority): string {
+  switch (priority) {
+    case "low":
+      return "bg-slate-100 text-slate-700";
+    case "medium":
+      return "bg-amber-100 text-amber-700";
+    case "high":
+      return "bg-rose-100 text-rose-700";
+    default:
+      return "bg-slate-100 text-slate-700";
+  }
+}
 
 interface TodoFormState {
   title: string;
   description: string;
   dueDate: string;
+  status: TodoStatus;
+  priority: TodoPriority;
 }
 
 const defaultForm: TodoFormState = {
   title: "",
   description: "",
   dueDate: "",
+  status: "todo",
+  priority: "medium",
 };
 
 async function parseApiResponse<TData>(response: Response): Promise<TData> {
@@ -47,6 +103,13 @@ async function parseApiResponse<TData>(response: Response): Promise<TData> {
 export function TodoApp() {
   const [todos, setTodos] = useState<TodoItem[]>([]);
   const [formState, setFormState] = useState<TodoFormState>(defaultForm);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [statusFilter, setStatusFilter] = useState<"all" | TodoStatus>("all");
+  const [priorityFilter, setPriorityFilter] = useState<"all" | TodoPriority>("all");
+  const [sortField, setSortField] = useState<TodoSortField>("createdAt");
+  const [sortDirection, setSortDirection] = useState<SortDirection>("desc");
+  const [showOnlyWithDueDate, setShowOnlyWithDueDate] = useState(false);
+  const [showOnlyOverdue, setShowOnlyOverdue] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
@@ -100,18 +163,16 @@ export function TodoApp() {
     }
   }
 
-  async function handleToggleTodo(todo: TodoItem, checked: boolean) {
+  async function handleUpdateTodo(todoId: string, updates: Partial<TodoItem>) {
     setErrorMessage(null);
 
     try {
-      const response = await fetch(`/api/todos/${todo.id}`, {
+      const response = await fetch(`/api/todos/${todoId}`, {
         method: "PATCH",
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({
-          status: checked ? "done" : "pending",
-        }),
+        body: JSON.stringify(updates),
       });
 
       const updatedTodo = await parseApiResponse<TodoItem>(response);
@@ -121,6 +182,11 @@ export function TodoApp() {
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : "Impossible de mettre a jour la tache.");
     }
+  }
+
+  async function handleToggleTodo(todo: TodoItem, checked: boolean) {
+    const nextStatus: TodoStatus = checked ? "done" : "in_progress";
+    await handleUpdateTodo(todo.id, { status: nextStatus });
   }
 
   async function handleDeleteTodo(todoId: string) {
@@ -188,21 +254,106 @@ export function TodoApp() {
     }
   }
 
+  const filteredSortedTodos = useMemo(() => {
+    const now = Date.now();
+    const normalizedSearch = searchQuery.trim().toLowerCase();
+
+    const filteredTodos = todos.filter((todo) => {
+      if (statusFilter !== "all" && todo.status !== statusFilter) {
+        return false;
+      }
+
+      if (priorityFilter !== "all" && todo.priority !== priorityFilter) {
+        return false;
+      }
+
+      if (showOnlyWithDueDate && !todo.dueDate) {
+        return false;
+      }
+
+      if (showOnlyOverdue) {
+        if (!todo.dueDate || todo.status === "done") {
+          return false;
+        }
+
+        const dueDateTimestamp = new Date(todo.dueDate).getTime();
+        if (Number.isNaN(dueDateTimestamp) || dueDateTimestamp >= now) {
+          return false;
+        }
+      }
+
+      if (!normalizedSearch) {
+        return true;
+      }
+
+      const haystack = [todo.title, todo.description ?? "", todo.attachment?.fileName ?? ""]
+        .join(" ")
+        .toLowerCase();
+
+      return haystack.includes(normalizedSearch);
+    });
+
+    const sortedTodos = [...filteredTodos].sort((leftTodo, rightTodo) => {
+      let comparison = 0;
+
+      switch (sortField) {
+        case "title":
+          comparison = leftTodo.title.localeCompare(rightTodo.title, "fr");
+          break;
+        case "priority":
+          comparison = priorityOrder[leftTodo.priority] - priorityOrder[rightTodo.priority];
+          break;
+        case "status":
+          comparison = statusOrder[leftTodo.status] - statusOrder[rightTodo.status];
+          break;
+        case "dueDate": {
+          const leftDueDate = leftTodo.dueDate ? new Date(leftTodo.dueDate).getTime() : Number.POSITIVE_INFINITY;
+          const rightDueDate = rightTodo.dueDate
+            ? new Date(rightTodo.dueDate).getTime()
+            : Number.POSITIVE_INFINITY;
+          comparison = leftDueDate - rightDueDate;
+          break;
+        }
+        case "updatedAt":
+          comparison = new Date(leftTodo.updatedAt).getTime() - new Date(rightTodo.updatedAt).getTime();
+          break;
+        case "createdAt":
+        default:
+          comparison = new Date(leftTodo.createdAt).getTime() - new Date(rightTodo.createdAt).getTime();
+          break;
+      }
+
+      return sortDirection === "asc" ? comparison : -comparison;
+    });
+
+    return sortedTodos;
+  }, [
+    priorityFilter,
+    searchQuery,
+    showOnlyOverdue,
+    showOnlyWithDueDate,
+    sortDirection,
+    sortField,
+    statusFilter,
+    todos,
+  ]);
+
   return (
     <div className="mx-auto flex w-full max-w-5xl flex-1 flex-col gap-8 px-4 py-6 sm:px-6 lg:px-10">
       <header className="space-y-3">
         <Badge className="bg-amber-100 text-amber-900 hover:bg-amber-100">Azure Todo MVP</Badge>
         <h1 className="text-3xl font-semibold tracking-tight text-slate-950 sm:text-4xl">Todo App avec Azure</h1>
         <p className="max-w-2xl text-sm text-slate-600 sm:text-base">
-          Cette iteration fournit le socle Next.js + shadcn/ui avec API CRUD, stockage Cosmos DB, pieces
-          jointes Blob Storage et lecture des secrets via Key Vault.
+          Cette iteration ajoute des statuts enrichis, des priorites, et un espace de filtres et tris avances.
         </p>
       </header>
 
       <Card className="border-slate-200/70 shadow-sm">
         <CardHeader>
           <CardTitle>Nouvelle tache</CardTitle>
-          <CardDescription>Ajoutez un titre, une description et une date cible optionnelle.</CardDescription>
+          <CardDescription>
+            Ajoutez un titre, une description, une priorite, un statut initial et une date cible optionnelle.
+          </CardDescription>
         </CardHeader>
         <CardContent>
           <form onSubmit={handleCreateTodo} className="grid gap-4">
@@ -251,6 +402,53 @@ export function TodoApp() {
                 }
               />
             </div>
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div className="grid gap-2">
+                <Label htmlFor="status">Statut</Label>
+                <select
+                  id="status"
+                  aria-label="Statut initial de la tache"
+                  title="Statut initial de la tache"
+                  className="h-9 rounded-md border border-input bg-background px-3 text-sm"
+                  value={formState.status}
+                  onChange={(event) =>
+                    setFormState((previousState) => ({
+                      ...previousState,
+                      status: event.target.value as TodoStatus,
+                    }))
+                  }
+                >
+                  {todoStatusValues.map((status) => (
+                    <option key={status} value={status}>
+                      {todoStatusLabels[status]}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="grid gap-2">
+                <Label htmlFor="priority">Priorite</Label>
+                <select
+                  id="priority"
+                  aria-label="Priorite initiale de la tache"
+                  title="Priorite initiale de la tache"
+                  className="h-9 rounded-md border border-input bg-background px-3 text-sm"
+                  value={formState.priority}
+                  onChange={(event) =>
+                    setFormState((previousState) => ({
+                      ...previousState,
+                      priority: event.target.value as TodoPriority,
+                    }))
+                  }
+                >
+                  {todoPriorityValues.map((priority) => (
+                    <option key={priority} value={priority}>
+                      {todoPriorityLabels[priority]}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
             <div className="flex items-center gap-3">
               <Button type="submit" disabled={isSubmitting}>
                 {isSubmitting ? (
@@ -266,6 +464,140 @@ export function TodoApp() {
               {errorMessage ? <p className="text-sm text-rose-700">{errorMessage}</p> : null}
             </div>
           </form>
+        </CardContent>
+      </Card>
+
+      <Card className="border-slate-200/70 shadow-sm">
+        <CardHeader>
+          <CardTitle>Filtres et tris avances</CardTitle>
+          <CardDescription>Combinez recherche, filtres et tri pour piloter votre backlog.</CardDescription>
+        </CardHeader>
+        <CardContent className="grid gap-4">
+          <div className="grid gap-4 md:grid-cols-2">
+            <div className="grid gap-2">
+              <Label htmlFor="search">Recherche</Label>
+              <Input
+                id="search"
+                placeholder="Titre, description, fichier joint..."
+                value={searchQuery}
+                onChange={(event) => setSearchQuery(event.target.value)}
+              />
+            </div>
+
+            <div className="grid gap-2 md:grid-cols-2">
+              <div className="grid gap-2">
+                <Label htmlFor="statusFilter">Statut</Label>
+                <select
+                  id="statusFilter"
+                  aria-label="Filtrer par statut"
+                  title="Filtrer par statut"
+                  className="h-9 rounded-md border border-input bg-background px-3 text-sm"
+                  value={statusFilter}
+                  onChange={(event) => setStatusFilter(event.target.value as "all" | TodoStatus)}
+                >
+                  <option value="all">Tous</option>
+                  {todoStatusValues.map((status) => (
+                    <option key={status} value={status}>
+                      {todoStatusLabels[status]}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="grid gap-2">
+                <Label htmlFor="priorityFilter">Priorite</Label>
+                <select
+                  id="priorityFilter"
+                  aria-label="Filtrer par priorite"
+                  title="Filtrer par priorite"
+                  className="h-9 rounded-md border border-input bg-background px-3 text-sm"
+                  value={priorityFilter}
+                  onChange={(event) => setPriorityFilter(event.target.value as "all" | TodoPriority)}
+                >
+                  <option value="all">Toutes</option>
+                  {todoPriorityValues.map((priority) => (
+                    <option key={priority} value={priority}>
+                      {todoPriorityLabels[priority]}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+          </div>
+
+          <div className="grid gap-4 md:grid-cols-4">
+            <div className="grid gap-2 md:col-span-2">
+              <Label htmlFor="sortField">Tri</Label>
+              <select
+                id="sortField"
+                aria-label="Trier par"
+                title="Trier par"
+                className="h-9 rounded-md border border-input bg-background px-3 text-sm"
+                value={sortField}
+                onChange={(event) => setSortField(event.target.value as TodoSortField)}
+              >
+                <option value="createdAt">Date de creation</option>
+                <option value="updatedAt">Derniere mise a jour</option>
+                <option value="dueDate">Echeance</option>
+                <option value="priority">Priorite</option>
+                <option value="status">Statut</option>
+                <option value="title">Titre</option>
+              </select>
+            </div>
+
+            <div className="grid gap-2">
+              <Label htmlFor="sortDirection">Sens</Label>
+              <select
+                id="sortDirection"
+                aria-label="Sens du tri"
+                title="Sens du tri"
+                className="h-9 rounded-md border border-input bg-background px-3 text-sm"
+                value={sortDirection}
+                onChange={(event) => setSortDirection(event.target.value as SortDirection)}
+              >
+                <option value="asc">Ascendant</option>
+                <option value="desc">Descendant</option>
+              </select>
+            </div>
+
+            <div className="flex items-end">
+              <Button
+                variant="outline"
+                className="w-full"
+                onClick={() => {
+                  setSearchQuery("");
+                  setStatusFilter("all");
+                  setPriorityFilter("all");
+                  setSortField("createdAt");
+                  setSortDirection("desc");
+                  setShowOnlyWithDueDate(false);
+                  setShowOnlyOverdue(false);
+                }}
+              >
+                Reinitialiser
+              </Button>
+            </div>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-4 text-sm text-slate-700">
+            <label className="inline-flex items-center gap-2">
+              <input
+                type="checkbox"
+                checked={showOnlyWithDueDate}
+                onChange={(event) => setShowOnlyWithDueDate(event.target.checked)}
+              />
+              Avec echeance
+            </label>
+            <label className="inline-flex items-center gap-2">
+              <input
+                type="checkbox"
+                checked={showOnlyOverdue}
+                onChange={(event) => setShowOnlyOverdue(event.target.checked)}
+              />
+              En retard uniquement
+            </label>
+            <span className="text-slate-500">Resultat: {filteredSortedTodos.length} / {todos.length}</span>
+          </div>
         </CardContent>
       </Card>
 
@@ -286,16 +618,16 @@ export function TodoApp() {
           </div>
         ) : null}
 
-        {!isLoading && todos.length === 0 ? (
+        {!isLoading && filteredSortedTodos.length === 0 ? (
           <Card className="border-dashed">
             <CardContent className="py-8 text-center text-sm text-slate-600">
-              Aucune tache pour le moment. Creez-en une pour commencer.
+              Aucune tache ne correspond a vos filtres.
             </CardContent>
           </Card>
         ) : null}
 
         <div className="grid gap-3">
-          {todos.map((todo) => {
+          {filteredSortedTodos.map((todo) => {
             const isDone = todo.status === "done";
 
             return (
@@ -314,8 +646,11 @@ export function TodoApp() {
                         <CardTitle className={isDone ? "line-through text-slate-500" : "text-slate-900"}>
                           {todo.title}
                         </CardTitle>
-                        <Badge variant={isDone ? "secondary" : "default"}>
-                          {isDone ? "Terminee" : "En cours"}
+                        <Badge className={getStatusBadgeClass(todo.status)}>
+                          {todoStatusLabels[todo.status]}
+                        </Badge>
+                        <Badge className={getPriorityBadgeClass(todo.priority)}>
+                          Priorite {todoPriorityLabels[todo.priority]}
                         </Badge>
                       </div>
                       {todo.description ? <CardDescription>{todo.description}</CardDescription> : null}
@@ -340,6 +675,50 @@ export function TodoApp() {
                         Echeance {format(new Date(todo.dueDate), "dd MMM yyyy", { locale: fr })}
                       </Badge>
                     ) : null}
+                  </div>
+
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <div className="grid gap-1">
+                      <Label>Statut</Label>
+                      <select
+                        aria-label={`Statut de ${todo.title}`}
+                        title={`Statut de ${todo.title}`}
+                        className="h-8 rounded-md border border-input bg-background px-2 text-xs"
+                        value={todo.status}
+                        onChange={(event) => {
+                          void handleUpdateTodo(todo.id, {
+                            status: event.target.value as TodoStatus,
+                          });
+                        }}
+                      >
+                        {todoStatusValues.map((status) => (
+                          <option key={status} value={status}>
+                            {todoStatusLabels[status]}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div className="grid gap-1">
+                      <Label>Priorite</Label>
+                      <select
+                        aria-label={`Priorite de ${todo.title}`}
+                        title={`Priorite de ${todo.title}`}
+                        className="h-8 rounded-md border border-input bg-background px-2 text-xs"
+                        value={todo.priority}
+                        onChange={(event) => {
+                          void handleUpdateTodo(todo.id, {
+                            priority: event.target.value as TodoPriority,
+                          });
+                        }}
+                      >
+                        {todoPriorityValues.map((priority) => (
+                          <option key={priority} value={priority}>
+                            {todoPriorityLabels[priority]}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
                   </div>
 
                   <div className="flex flex-wrap items-center gap-3">
