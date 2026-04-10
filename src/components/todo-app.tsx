@@ -2,17 +2,46 @@
 
 import { format } from "date-fns";
 import { fr } from "date-fns/locale";
-import { Download, Loader2, Paperclip, Trash2 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  ArrowUpDown,
+  ChevronDown,
+  ClipboardList,
+  Download,
+  Eye,
+  EyeOff,
+  Loader2,
+  Paperclip,
+  Plus,
+  RotateCcw,
+  Search,
+  Trash2,
+} from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
 import { Textarea } from "@/components/ui/textarea";
+import { useToastManager } from "@/components/ui/toast";
 import {
   todoPriorityLabels,
   todoPriorityValues,
@@ -44,28 +73,28 @@ type AttachmentPreviewKind = "image" | "pdf" | "other";
 function getStatusBadgeClass(status: TodoStatus): string {
   switch (status) {
     case "todo":
-      return "bg-slate-100 text-slate-700";
+      return "bg-slate-100 text-slate-700 hover:bg-slate-200/80";
     case "in_progress":
-      return "bg-sky-100 text-sky-700";
+      return "bg-sky-100 text-sky-700 hover:bg-sky-200/80";
     case "blocked":
-      return "bg-rose-100 text-rose-700";
+      return "bg-rose-100 text-rose-700 hover:bg-rose-200/80";
     case "done":
-      return "bg-emerald-100 text-emerald-700";
+      return "bg-emerald-100 text-emerald-700 hover:bg-emerald-200/80";
     default:
-      return "bg-slate-100 text-slate-700";
+      return "bg-slate-100 text-slate-700 hover:bg-slate-200/80";
   }
 }
 
 function getPriorityBadgeClass(priority: TodoPriority): string {
   switch (priority) {
     case "low":
-      return "bg-slate-100 text-slate-700";
+      return "bg-slate-100 text-slate-700 hover:bg-slate-200/80";
     case "medium":
-      return "bg-amber-100 text-amber-700";
+      return "bg-amber-100 text-amber-700 hover:bg-amber-200/80";
     case "high":
-      return "bg-rose-100 text-rose-700";
+      return "bg-rose-100 text-rose-700 hover:bg-rose-200/80";
     default:
-      return "bg-slate-100 text-slate-700";
+      return "bg-slate-100 text-slate-700 hover:bg-slate-200/80";
   }
 }
 
@@ -105,6 +134,15 @@ function inferAttachmentPreviewKind(contentType: string, fileName: string): Atta
   return "other";
 }
 
+const sortFieldLabels: Record<TodoSortField, string> = {
+  createdAt: "Date de creation",
+  updatedAt: "Derniere MAJ",
+  dueDate: "Echeance",
+  priority: "Priorite",
+  status: "Statut",
+  title: "Titre",
+};
+
 interface TodoFormState {
   title: string;
   description: string;
@@ -138,9 +176,31 @@ async function parseApiResponse<TData>(response: Response): Promise<TData> {
   return payload.data;
 }
 
+function TodoCardSkeleton() {
+  return (
+    <Card className="border-slate-200/80">
+      <CardHeader className="pb-2">
+        <div className="flex items-center gap-3">
+          <div className="size-4 animate-pulse rounded bg-slate-200" />
+          <div className="h-5 w-48 animate-pulse rounded bg-slate-200" />
+          <div className="h-5 w-16 animate-pulse rounded-full bg-slate-100" />
+          <div className="h-5 w-20 animate-pulse rounded-full bg-slate-100" />
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-2">
+        <div className="h-4 w-36 animate-pulse rounded bg-slate-100" />
+        <div className="h-4 w-24 animate-pulse rounded bg-slate-100" />
+      </CardContent>
+    </Card>
+  );
+}
+
 export function TodoApp() {
+  const toastManager = useToastManager();
+
   const [todos, setTodos] = useState<TodoItem[]>([]);
   const [formState, setFormState] = useState<TodoFormState>(defaultForm);
+  const [isFormOpen, setIsFormOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<"all" | TodoStatus>("all");
   const [priorityFilter, setPriorityFilter] = useState<"all" | TodoPriority>("all");
@@ -152,12 +212,12 @@ export function TodoApp() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [uploadProgressByTodoId, setUploadProgressByTodoId] = useState<Record<string, number>>({});
   const [uploadingTodoIds, setUploadingTodoIds] = useState<Record<string, boolean>>({});
-  const [message, setMessage] = useState<string | null>(null);
-  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [expandedAttachments, setExpandedAttachments] = useState<Set<string>>(new Set());
+  const [confirmingDeleteId, setConfirmingDeleteId] = useState<string | null>(null);
+  const deleteTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const loadTodos = useCallback(async () => {
     setIsLoading(true);
-    setErrorMessage(null);
 
     try {
       const response = await fetch("/api/todos", {
@@ -166,11 +226,15 @@ export function TodoApp() {
       const data = await parseApiResponse<TodoItem[]>(response);
       setTodos(data);
     } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : "Impossible de charger les taches.");
+      toastManager.add({
+        type: "error",
+        title: error instanceof Error ? error.message : "Impossible de charger les taches.",
+        timeout: 5000,
+      });
     } finally {
       setIsLoading(false);
     }
-  }, []);
+  }, [toastManager]);
 
   useEffect(() => {
     void loadTodos();
@@ -180,8 +244,6 @@ export function TodoApp() {
     event.preventDefault();
 
     setIsSubmitting(true);
-    setErrorMessage(null);
-    setMessage(null);
 
     try {
       const response = await fetch("/api/todos", {
@@ -195,17 +257,23 @@ export function TodoApp() {
       const createdTodo = await parseApiResponse<TodoItem>(response);
       setTodos((previousTodos) => [createdTodo, ...previousTodos]);
       setFormState(defaultForm);
-      setMessage("Tache creee avec succes.");
+      setIsFormOpen(false);
+      toastManager.add({
+        type: "success",
+        title: "Tache creee avec succes.",
+      });
     } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : "Impossible de creer la tache.");
+      toastManager.add({
+        type: "error",
+        title: error instanceof Error ? error.message : "Impossible de creer la tache.",
+        timeout: 5000,
+      });
     } finally {
       setIsSubmitting(false);
     }
   }
 
   async function handleUpdateTodo(todoId: string, updates: Partial<TodoItem>) {
-    setErrorMessage(null);
-
     try {
       const response = await fetch(`/api/todos/${todoId}`, {
         method: "PATCH",
@@ -220,7 +288,11 @@ export function TodoApp() {
         previousTodos.map((existingTodo) => (existingTodo.id === updatedTodo.id ? updatedTodo : existingTodo)),
       );
     } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : "Impossible de mettre a jour la tache.");
+      toastManager.add({
+        type: "error",
+        title: error instanceof Error ? error.message : "Impossible de mettre a jour la tache.",
+        timeout: 5000,
+      });
     }
   }
 
@@ -229,10 +301,27 @@ export function TodoApp() {
     await handleUpdateTodo(todo.id, { status: nextStatus });
   }
 
-  async function handleDeleteTodo(todoId: string) {
-    setErrorMessage(null);
-    setMessage(null);
+  function handleDeleteClick(todoId: string) {
+    if (confirmingDeleteId === todoId) {
+      if (deleteTimerRef.current) {
+        clearTimeout(deleteTimerRef.current);
+        deleteTimerRef.current = null;
+      }
+      setConfirmingDeleteId(null);
+      void handleDeleteTodo(todoId);
+    } else {
+      setConfirmingDeleteId(todoId);
+      if (deleteTimerRef.current) {
+        clearTimeout(deleteTimerRef.current);
+      }
+      deleteTimerRef.current = setTimeout(() => {
+        setConfirmingDeleteId(null);
+        deleteTimerRef.current = null;
+      }, 3000);
+    }
+  }
 
+  async function handleDeleteTodo(todoId: string) {
     try {
       const response = await fetch(`/api/todos/${todoId}`, {
         method: "DELETE",
@@ -246,15 +335,17 @@ export function TodoApp() {
       }
 
       setTodos((previousTodos) => previousTodos.filter((todo) => todo.id !== todoId));
-      setMessage("Tache supprimee.");
+      toastManager.add({ type: "success", title: "Tache supprimee." });
     } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : "Impossible de supprimer la tache.");
+      toastManager.add({
+        type: "error",
+        title: error instanceof Error ? error.message : "Impossible de supprimer la tache.",
+        timeout: 5000,
+      });
     }
   }
 
   async function handleAttachmentUpload(todoId: string, file: File) {
-    setErrorMessage(null);
-    setMessage(null);
     setUploadingTodoIds((previousState) => ({
       ...previousState,
       [todoId]: true,
@@ -324,9 +415,13 @@ export function TodoApp() {
       setTodos((previousTodos) =>
         previousTodos.map((existingTodo) => (existingTodo.id === updatedTodo.id ? updatedTodo : existingTodo)),
       );
-      setMessage("Piece jointe ajoutee.");
+      toastManager.add({ type: "success", title: "Piece jointe ajoutee." });
     } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : "Impossible d'ajouter la piece jointe.");
+      toastManager.add({
+        type: "error",
+        title: error instanceof Error ? error.message : "Impossible d'ajouter la piece jointe.",
+        timeout: 5000,
+      });
     } finally {
       setUploadingTodoIds((previousState) => {
         const nextState = { ...previousState };
@@ -345,9 +440,6 @@ export function TodoApp() {
   }
 
   async function handleAttachmentDelete(todoId: string) {
-    setErrorMessage(null);
-    setMessage(null);
-
     try {
       const response = await fetch(`/api/todos/${todoId}/attachment`, {
         method: "DELETE",
@@ -357,11 +449,30 @@ export function TodoApp() {
       setTodos((previousTodos) =>
         previousTodos.map((existingTodo) => (existingTodo.id === updatedTodo.id ? updatedTodo : existingTodo)),
       );
-      setMessage("Piece jointe supprimee.");
+      setExpandedAttachments((prev) => {
+        const next = new Set(prev);
+        next.delete(todoId);
+        return next;
+      });
+      toastManager.add({ type: "success", title: "Piece jointe supprimee." });
     } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : "Impossible de supprimer la piece jointe.");
+      toastManager.add({
+        type: "error",
+        title: error instanceof Error ? error.message : "Impossible de supprimer la piece jointe.",
+        timeout: 5000,
+      });
     }
   }
+
+  const activeFilterCount = useMemo(() => {
+    let count = 0;
+    if (statusFilter !== "all") count++;
+    if (priorityFilter !== "all") count++;
+    if (showOnlyWithDueDate) count++;
+    if (showOnlyOverdue) count++;
+    if (searchQuery.trim()) count++;
+    return count;
+  }, [statusFilter, priorityFilter, showOnlyWithDueDate, showOnlyOverdue, searchQuery]);
 
   const filteredSortedTodos = useMemo(() => {
     const now = Date.now();
@@ -447,273 +558,316 @@ export function TodoApp() {
     todos,
   ]);
 
+  function handleResetFilters() {
+    setSearchQuery("");
+    setStatusFilter("all");
+    setPriorityFilter("all");
+    setSortField("createdAt");
+    setSortDirection("desc");
+    setShowOnlyWithDueDate(false);
+    setShowOnlyOverdue(false);
+  }
+
+  function toggleAttachmentPreview(todoId: string) {
+    setExpandedAttachments((prev) => {
+      const next = new Set(prev);
+      if (next.has(todoId)) {
+        next.delete(todoId);
+      } else {
+        next.add(todoId);
+      }
+      return next;
+    });
+  }
+
   return (
-    <div className="mx-auto flex w-full max-w-5xl flex-1 flex-col gap-8 px-4 py-6 sm:px-6 lg:px-10">
-      <header className="space-y-3">
-        <Badge className="bg-amber-100 text-amber-900 hover:bg-amber-100">Azure Todo MVP</Badge>
-        <h1 className="text-3xl font-semibold tracking-tight text-slate-950 sm:text-4xl">Todo App avec Azure</h1>
-        <p className="max-w-2xl text-sm text-slate-600 sm:text-base">
-          Cette iteration ajoute des statuts enrichis, des priorites, et un espace de filtres et tris avances.
+    <div className="mx-auto flex w-full max-w-5xl flex-1 flex-col gap-6 px-4 py-6 sm:px-6 lg:px-10">
+      {/* Header */}
+      <header className="space-y-1">
+        <h1 className="text-3xl font-semibold tracking-tight text-slate-950 sm:text-4xl">
+          Todo App
+        </h1>
+        <p className="text-sm text-slate-500 sm:text-base">
+          Gerez vos taches et suivez leur avancement.
         </p>
       </header>
 
-      <Card className="border-slate-200/70 shadow-sm">
-        <CardHeader>
-          <CardTitle>Nouvelle tache</CardTitle>
-          <CardDescription>
-            Ajoutez un titre, une description, une priorite, un statut initial et une date cible optionnelle.
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <form onSubmit={handleCreateTodo} className="grid gap-4">
-            <div className="grid gap-2">
-              <Label htmlFor="title">Titre</Label>
-              <Input
-                id="title"
-                value={formState.title}
-                onChange={(event) =>
-                  setFormState((previousState) => ({
-                    ...previousState,
-                    title: event.target.value,
-                  }))
-                }
-                placeholder="Ex: Ajouter le monitoring App Service"
-                required
-                maxLength={120}
-              />
-            </div>
-            <div className="grid gap-2">
-              <Label htmlFor="description">Description</Label>
-              <Textarea
-                id="description"
-                value={formState.description}
-                onChange={(event) =>
-                  setFormState((previousState) => ({
-                    ...previousState,
-                    description: event.target.value,
-                  }))
-                }
-                placeholder="Details de la tache"
-                maxLength={500}
-              />
-            </div>
-            <div className="grid gap-2 sm:max-w-xs">
-              <Label htmlFor="dueDate">Date cible</Label>
-              <Input
-                id="dueDate"
-                type="date"
-                value={formState.dueDate}
-                onChange={(event) =>
-                  setFormState((previousState) => ({
-                    ...previousState,
-                    dueDate: event.target.value,
-                  }))
-                }
-              />
-            </div>
-            <div className="grid gap-4 sm:grid-cols-2">
-              <div className="grid gap-2">
-                <Label htmlFor="status">Statut</Label>
-                <select
-                  id="status"
-                  aria-label="Statut initial de la tache"
-                  title="Statut initial de la tache"
-                  className="h-9 rounded-md border border-input bg-background px-3 text-sm"
-                  value={formState.status}
-                  onChange={(event) =>
-                    setFormState((previousState) => ({
-                      ...previousState,
-                      status: event.target.value as TodoStatus,
-                    }))
-                  }
-                >
-                  {todoStatusValues.map((status) => (
-                    <option key={status} value={status}>
-                      {todoStatusLabels[status]}
-                    </option>
-                  ))}
-                </select>
-              </div>
+      {/* Collapsible creation form */}
+      <Collapsible open={isFormOpen} onOpenChange={setIsFormOpen}>
+        <CollapsibleTrigger
+          render={
+            <Button
+              variant="outline"
+              className="w-full justify-between gap-2 border-dashed border-slate-300 py-5 text-sm font-medium text-slate-600 hover:border-slate-400 hover:bg-slate-50"
+            />
+          }
+        >
+          <span className="inline-flex items-center gap-2">
+            <Plus className="size-4" />
+            Nouvelle tache
+          </span>
+          <ChevronDown
+            className={`size-4 text-slate-400 transition-transform duration-200 ${isFormOpen ? "rotate-180" : ""}`}
+          />
+        </CollapsibleTrigger>
+        <CollapsibleContent className="overflow-hidden data-[state=closed]:animate-collapsible-up data-[state=open]:animate-collapsible-down">
+          <Card className="mt-3 border-slate-200/70 shadow-sm">
+            <CardHeader>
+              <CardTitle>Nouvelle tache</CardTitle>
+              <CardDescription>
+                Ajoutez un titre, une description, une priorite, un statut initial et une date cible optionnelle.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <form onSubmit={handleCreateTodo} className="grid gap-4">
+                <div className="grid gap-2">
+                  <Label htmlFor="title">Titre</Label>
+                  <Input
+                    id="title"
+                    value={formState.title}
+                    onChange={(event) =>
+                      setFormState((previousState) => ({
+                        ...previousState,
+                        title: event.target.value,
+                      }))
+                    }
+                    placeholder="Ex: Ajouter le monitoring App Service"
+                    required
+                    maxLength={120}
+                  />
+                </div>
+                <div className="grid gap-2">
+                  <Label htmlFor="description">Description</Label>
+                  <Textarea
+                    id="description"
+                    value={formState.description}
+                    onChange={(event) =>
+                      setFormState((previousState) => ({
+                        ...previousState,
+                        description: event.target.value,
+                      }))
+                    }
+                    placeholder="Details de la tache"
+                    maxLength={500}
+                  />
+                </div>
+                <div className="grid gap-4 sm:grid-cols-3">
+                  <div className="grid gap-2">
+                    <Label htmlFor="dueDate">Date cible</Label>
+                    <Input
+                      id="dueDate"
+                      type="date"
+                      value={formState.dueDate}
+                      onChange={(event) =>
+                        setFormState((previousState) => ({
+                          ...previousState,
+                          dueDate: event.target.value,
+                        }))
+                      }
+                    />
+                  </div>
+                  <div className="grid gap-2">
+                    <Label>Statut</Label>
+                    <Select
+                      value={formState.status}
+                      onValueChange={(value) =>
+                        setFormState((prev) => ({ ...prev, status: value as TodoStatus }))
+                      }
+                    >
+                      <SelectTrigger className="w-full">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {todoStatusValues.map((status) => (
+                          <SelectItem key={status} value={status}>
+                            {todoStatusLabels[status]}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="grid gap-2">
+                    <Label>Priorite</Label>
+                    <Select
+                      value={formState.priority}
+                      onValueChange={(value) =>
+                        setFormState((prev) => ({ ...prev, priority: value as TodoPriority }))
+                      }
+                    >
+                      <SelectTrigger className="w-full">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {todoPriorityValues.map((priority) => (
+                          <SelectItem key={priority} value={priority}>
+                            {todoPriorityLabels[priority]}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+                <div>
+                  <Button type="submit" disabled={isSubmitting}>
+                    {isSubmitting ? (
+                      <span className="inline-flex items-center gap-2">
+                        <Loader2 className="size-4 animate-spin" />
+                        Creation...
+                      </span>
+                    ) : (
+                      "Ajouter la tache"
+                    )}
+                  </Button>
+                </div>
+              </form>
+            </CardContent>
+          </Card>
+        </CollapsibleContent>
+      </Collapsible>
 
-              <div className="grid gap-2">
-                <Label htmlFor="priority">Priorite</Label>
-                <select
-                  id="priority"
-                  aria-label="Priorite initiale de la tache"
-                  title="Priorite initiale de la tache"
-                  className="h-9 rounded-md border border-input bg-background px-3 text-sm"
-                  value={formState.priority}
-                  onChange={(event) =>
-                    setFormState((previousState) => ({
-                      ...previousState,
-                      priority: event.target.value as TodoPriority,
-                    }))
-                  }
-                >
-                  {todoPriorityValues.map((priority) => (
-                    <option key={priority} value={priority}>
-                      {todoPriorityLabels[priority]}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            </div>
-            <div className="flex items-center gap-3">
-              <Button type="submit" disabled={isSubmitting}>
-                {isSubmitting ? (
-                  <span className="inline-flex items-center gap-2">
-                    <Loader2 className="size-4 animate-spin" />
-                    Creation...
-                  </span>
-                ) : (
-                  "Ajouter la tache"
-                )}
-              </Button>
-              {message ? <p className="text-sm text-emerald-700">{message}</p> : null}
-              {errorMessage ? <p className="text-sm text-rose-700">{errorMessage}</p> : null}
-            </div>
-          </form>
-        </CardContent>
-      </Card>
-
-      <Card className="border-slate-200/70 shadow-sm">
-        <CardHeader>
-          <CardTitle>Filtres et tris avances</CardTitle>
-          <CardDescription>Combinez recherche, filtres et tri pour piloter votre backlog.</CardDescription>
-        </CardHeader>
-        <CardContent className="grid gap-4">
-          <div className="grid gap-4 md:grid-cols-2">
-            <div className="grid gap-2">
-              <Label htmlFor="search">Recherche</Label>
-              <Input
-                id="search"
-                placeholder="Titre, description, fichier joint..."
-                value={searchQuery}
-                onChange={(event) => setSearchQuery(event.target.value)}
-              />
-            </div>
-
-            <div className="grid gap-2 md:grid-cols-2">
-              <div className="grid gap-2">
-                <Label htmlFor="statusFilter">Statut</Label>
-                <select
-                  id="statusFilter"
-                  aria-label="Filtrer par statut"
-                  title="Filtrer par statut"
-                  className="h-9 rounded-md border border-input bg-background px-3 text-sm"
-                  value={statusFilter}
-                  onChange={(event) => setStatusFilter(event.target.value as "all" | TodoStatus)}
-                >
-                  <option value="all">Tous</option>
-                  {todoStatusValues.map((status) => (
-                    <option key={status} value={status}>
-                      {todoStatusLabels[status]}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <div className="grid gap-2">
-                <Label htmlFor="priorityFilter">Priorite</Label>
-                <select
-                  id="priorityFilter"
-                  aria-label="Filtrer par priorite"
-                  title="Filtrer par priorite"
-                  className="h-9 rounded-md border border-input bg-background px-3 text-sm"
-                  value={priorityFilter}
-                  onChange={(event) => setPriorityFilter(event.target.value as "all" | TodoPriority)}
-                >
-                  <option value="all">Toutes</option>
-                  {todoPriorityValues.map((priority) => (
-                    <option key={priority} value={priority}>
-                      {todoPriorityLabels[priority]}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            </div>
+      {/* Filter bar */}
+      <div className="space-y-3">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+          {/* Search */}
+          <div className="relative flex-1">
+            <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-slate-400" />
+            <Input
+              placeholder="Rechercher une tache..."
+              value={searchQuery}
+              onChange={(event) => setSearchQuery(event.target.value)}
+              className="pl-9"
+            />
           </div>
 
-          <div className="grid gap-4 md:grid-cols-4">
-            <div className="grid gap-2 md:col-span-2">
-              <Label htmlFor="sortField">Tri</Label>
-              <select
-                id="sortField"
-                aria-label="Trier par"
-                title="Trier par"
-                className="h-9 rounded-md border border-input bg-background px-3 text-sm"
-                value={sortField}
-                onChange={(event) => setSortField(event.target.value as TodoSortField)}
-              >
-                <option value="createdAt">Date de creation</option>
-                <option value="updatedAt">Derniere mise a jour</option>
-                <option value="dueDate">Echeance</option>
-                <option value="priority">Priorite</option>
-                <option value="status">Statut</option>
-                <option value="title">Titre</option>
-              </select>
-            </div>
-
-            <div className="grid gap-2">
-              <Label htmlFor="sortDirection">Sens</Label>
-              <select
-                id="sortDirection"
-                aria-label="Sens du tri"
-                title="Sens du tri"
-                className="h-9 rounded-md border border-input bg-background px-3 text-sm"
-                value={sortDirection}
-                onChange={(event) => setSortDirection(event.target.value as SortDirection)}
-              >
-                <option value="asc">Ascendant</option>
-                <option value="desc">Descendant</option>
-              </select>
-            </div>
-
-            <div className="flex items-end">
-              <Button
-                variant="outline"
-                className="w-full"
-                onClick={() => {
-                  setSearchQuery("");
-                  setStatusFilter("all");
-                  setPriorityFilter("all");
-                  setSortField("createdAt");
-                  setSortDirection("desc");
-                  setShowOnlyWithDueDate(false);
-                  setShowOnlyOverdue(false);
-                }}
-              >
-                Reinitialiser
-              </Button>
-            </div>
-          </div>
-
-          <div className="flex flex-wrap items-center gap-4 text-sm text-slate-700">
-            <label className="inline-flex items-center gap-2">
-              <input
-                type="checkbox"
-                checked={showOnlyWithDueDate}
-                onChange={(event) => setShowOnlyWithDueDate(event.target.checked)}
+          {/* Sort */}
+          <div className="flex items-center gap-2">
+            <Select value={sortField} onValueChange={(v) => setSortField(v as TodoSortField)}>
+              <SelectTrigger className="gap-1.5">
+                <ArrowUpDown className="size-3.5 text-slate-400" />
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {(Object.entries(sortFieldLabels) as [TodoSortField, string][]).map(([value, label]) => (
+                  <SelectItem key={value} value={value}>
+                    {label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="size-8 shrink-0"
+              onClick={() => setSortDirection((d) => (d === "asc" ? "desc" : "asc"))}
+              aria-label={sortDirection === "asc" ? "Tri descendant" : "Tri ascendant"}
+            >
+              <ChevronDown
+                className={`size-4 transition-transform duration-200 ${sortDirection === "asc" ? "rotate-180" : ""}`}
               />
-              Avec echeance
-            </label>
-            <label className="inline-flex items-center gap-2">
-              <input
-                type="checkbox"
-                checked={showOnlyOverdue}
-                onChange={(event) => setShowOnlyOverdue(event.target.checked)}
-              />
-              En retard uniquement
-            </label>
-            <span className="text-slate-500">Resultat: {filteredSortedTodos.length} / {todos.length}</span>
+            </Button>
           </div>
-        </CardContent>
-      </Card>
+        </div>
 
-      <section className="space-y-4">
+        {/* Status pills */}
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-xs font-medium text-slate-500">Statut</span>
+          <button
+            type="button"
+            onClick={() => setStatusFilter("all")}
+            className={`inline-flex h-6 items-center rounded-full px-2.5 text-xs font-medium transition-colors ${
+              statusFilter === "all"
+                ? "bg-slate-900 text-white"
+                : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+            }`}
+          >
+            Tous
+          </button>
+          {todoStatusValues.map((status) => (
+            <button
+              key={status}
+              type="button"
+              onClick={() => setStatusFilter(statusFilter === status ? "all" : status)}
+              className={`inline-flex h-6 items-center rounded-full px-2.5 text-xs font-medium transition-colors ${
+                statusFilter === status
+                  ? getStatusBadgeClass(status).replace(/hover:\S+/g, "") + " ring-1 ring-current/20"
+                  : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+              }`}
+            >
+              {todoStatusLabels[status]}
+            </button>
+          ))}
+
+          <Separator orientation="vertical" className="mx-1 h-4" />
+
+          <span className="text-xs font-medium text-slate-500">Priorite</span>
+          <button
+            type="button"
+            onClick={() => setPriorityFilter("all")}
+            className={`inline-flex h-6 items-center rounded-full px-2.5 text-xs font-medium transition-colors ${
+              priorityFilter === "all"
+                ? "bg-slate-900 text-white"
+                : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+            }`}
+          >
+            Toutes
+          </button>
+          {todoPriorityValues.map((priority) => (
+            <button
+              key={priority}
+              type="button"
+              onClick={() => setPriorityFilter(priorityFilter === priority ? "all" : priority)}
+              className={`inline-flex h-6 items-center rounded-full px-2.5 text-xs font-medium transition-colors ${
+                priorityFilter === priority
+                  ? getPriorityBadgeClass(priority).replace(/hover:\S+/g, "") + " ring-1 ring-current/20"
+                  : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+              }`}
+            >
+              {todoPriorityLabels[priority]}
+            </button>
+          ))}
+        </div>
+
+        {/* Checkbox filters + result count */}
+        <div className="flex flex-wrap items-center gap-4 text-sm">
+          <label className="inline-flex cursor-pointer items-center gap-2 text-slate-600">
+            <Checkbox
+              checked={showOnlyWithDueDate}
+              onCheckedChange={(checked) => setShowOnlyWithDueDate(checked === true)}
+            />
+            Avec echeance
+          </label>
+          <label className="inline-flex cursor-pointer items-center gap-2 text-slate-600">
+            <Checkbox
+              checked={showOnlyOverdue}
+              onCheckedChange={(checked) => setShowOnlyOverdue(checked === true)}
+            />
+            En retard
+          </label>
+
+          {activeFilterCount > 0 && (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-7 gap-1.5 text-xs text-slate-500"
+              onClick={handleResetFilters}
+            >
+              <RotateCcw className="size-3" />
+              Reinitialiser
+              <Badge className="ml-0.5 bg-slate-200 text-slate-700">{activeFilterCount}</Badge>
+            </Button>
+          )}
+
+          <span className="ml-auto text-xs text-slate-400">
+            {filteredSortedTodos.length} / {todos.length} taches
+          </span>
+        </div>
+      </div>
+
+      {/* Todo list */}
+      <section className="space-y-3">
         <div className="flex items-center justify-between">
-          <h2 className="text-xl font-medium text-slate-900">Liste des taches</h2>
-          <Button variant="outline" onClick={() => void loadTodos()} disabled={isLoading}>
+          <h2 className="text-lg font-medium text-slate-900">Liste des taches</h2>
+          <Button variant="outline" size="sm" onClick={() => void loadTodos()} disabled={isLoading}>
             Rafraichir
           </Button>
         </div>
@@ -721,22 +875,54 @@ export function TodoApp() {
         <Separator />
 
         {isLoading ? (
-          <div className="flex items-center gap-2 text-slate-600">
-            <Loader2 className="size-4 animate-spin" />
-            Chargement des taches...
+          <div className="grid gap-3">
+            <TodoCardSkeleton />
+            <TodoCardSkeleton />
+            <TodoCardSkeleton />
           </div>
         ) : null}
 
         {!isLoading && filteredSortedTodos.length === 0 ? (
-          <Card className="border-dashed">
-            <CardContent className="py-8 text-center text-sm text-slate-600">
-              Aucune tache ne correspond a vos filtres.
-            </CardContent>
-          </Card>
+          <div className="flex flex-col items-center justify-center py-16 text-center">
+            <ClipboardList className="mb-3 size-12 text-slate-300" />
+            {todos.length === 0 ? (
+              <>
+                <p className="text-base font-medium text-slate-500">Aucune tache</p>
+                <p className="mt-1 text-sm text-slate-400">
+                  Commencez par creer votre premiere tache.
+                </p>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="mt-4"
+                  onClick={() => setIsFormOpen(true)}
+                >
+                  <Plus className="size-4" />
+                  Creer une tache
+                </Button>
+              </>
+            ) : (
+              <>
+                <p className="text-base font-medium text-slate-500">Aucun resultat</p>
+                <p className="mt-1 text-sm text-slate-400">
+                  Aucune tache ne correspond a vos filtres.
+                </p>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="mt-3 text-xs"
+                  onClick={handleResetFilters}
+                >
+                  <RotateCcw className="size-3" />
+                  Reinitialiser les filtres
+                </Button>
+              </>
+            )}
+          </div>
         ) : null}
 
         <div className="grid gap-3">
-          {filteredSortedTodos.map((todo) => {
+          {filteredSortedTodos.map((todo, index) => {
             const isDone = todo.status === "done";
             const isUploadingAttachment = uploadingTodoIds[todo.id] === true;
             const uploadProgress = uploadProgressByTodoId[todo.id];
@@ -745,13 +931,19 @@ export function TodoApp() {
             const attachmentPreviewKind = todo.attachment
               ? inferAttachmentPreviewKind(todo.attachment.contentType, todo.attachment.fileName)
               : "other";
+            const isAttachmentExpanded = expandedAttachments.has(todo.id);
+            const isConfirmingDelete = confirmingDeleteId === todo.id;
 
             return (
-              <Card key={todo.id} className="border-slate-200/80">
+              <Card
+                key={todo.id}
+                className={`border-slate-200/80 transition-all duration-200 hover:border-slate-300 hover:shadow-md animate-in fade-in-0 slide-in-from-bottom-2 fill-mode-both ${isDone ? "opacity-60" : ""}`}
+                style={{ animationDelay: `${Math.min(index, 8) * 50}ms` }}
+              >
                 <CardHeader className="pb-2">
                   <div className="flex items-start justify-between gap-4">
-                    <div className="space-y-2">
-                      <div className="flex items-center gap-3">
+                    <div className="min-w-0 space-y-1.5">
+                      <div className="flex flex-wrap items-center gap-2">
                         <Checkbox
                           checked={isDone}
                           onCheckedChange={(checked) => {
@@ -759,92 +951,108 @@ export function TodoApp() {
                           }}
                           aria-label={`Basculer le statut de ${todo.title}`}
                         />
-                        <CardTitle className={isDone ? "line-through text-slate-500" : "text-slate-900"}>
+                        <CardTitle
+                          className={`transition-all duration-300 ${isDone ? "text-slate-400 line-through" : "text-slate-900"}`}
+                        >
                           {todo.title}
                         </CardTitle>
-                        <Badge className={getStatusBadgeClass(todo.status)}>
-                          {todoStatusLabels[todo.status]}
-                        </Badge>
-                        <Badge className={getPriorityBadgeClass(todo.priority)}>
-                          Priorite {todoPriorityLabels[todo.priority]}
-                        </Badge>
+
+                        {/* Clickable status badge */}
+                        <DropdownMenu>
+                          <DropdownMenuTrigger
+                            render={
+                              <button
+                                type="button"
+                                title={`Changer le statut : ${todoStatusLabels[todo.status]}`}
+                                className={`inline-flex h-5 cursor-pointer items-center rounded-full px-2 text-xs font-medium transition-shadow hover:ring-2 hover:ring-ring/30 ${getStatusBadgeClass(todo.status)}`}
+                              />
+                            }
+                          >
+                            {todoStatusLabels[todo.status]}
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent align="start">
+                            <DropdownMenuRadioGroup
+                              value={todo.status}
+                              onValueChange={(value) => {
+                                void handleUpdateTodo(todo.id, { status: value as TodoStatus });
+                              }}
+                            >
+                              {todoStatusValues.map((status) => (
+                                <DropdownMenuRadioItem key={status} value={status}>
+                                  {todoStatusLabels[status]}
+                                </DropdownMenuRadioItem>
+                              ))}
+                            </DropdownMenuRadioGroup>
+                          </DropdownMenuContent>
+                        </DropdownMenu>
+
+                        {/* Clickable priority badge */}
+                        <DropdownMenu>
+                          <DropdownMenuTrigger
+                            render={
+                              <button
+                                type="button"
+                                title={`Changer la priorite : ${todoPriorityLabels[todo.priority]}`}
+                                className={`inline-flex h-5 cursor-pointer items-center rounded-full px-2 text-xs font-medium transition-shadow hover:ring-2 hover:ring-ring/30 ${getPriorityBadgeClass(todo.priority)}`}
+                              />
+                            }
+                          >
+                            {todoPriorityLabels[todo.priority]}
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent align="start">
+                            <DropdownMenuRadioGroup
+                              value={todo.priority}
+                              onValueChange={(value) => {
+                                void handleUpdateTodo(todo.id, { priority: value as TodoPriority });
+                              }}
+                            >
+                              {todoPriorityValues.map((priority) => (
+                                <DropdownMenuRadioItem key={priority} value={priority}>
+                                  {todoPriorityLabels[priority]}
+                                </DropdownMenuRadioItem>
+                              ))}
+                            </DropdownMenuRadioGroup>
+                          </DropdownMenuContent>
+                        </DropdownMenu>
                       </div>
-                      {todo.description ? <CardDescription>{todo.description}</CardDescription> : null}
+                      {todo.description ? (
+                        <CardDescription className="pl-6">{todo.description}</CardDescription>
+                      ) : null}
                     </div>
+
+                    {/* Delete button with confirmation */}
                     <Button
-                      variant="ghost"
-                      size="icon"
-                      onClick={() => void handleDeleteTodo(todo.id)}
+                      variant={isConfirmingDelete ? "destructive" : "ghost"}
+                      size={isConfirmingDelete ? "sm" : "icon"}
+                      onClick={() => handleDeleteClick(todo.id)}
                       aria-label={`Supprimer ${todo.title}`}
+                      className={`shrink-0 transition-all ${isConfirmingDelete ? "h-8 px-3 text-xs" : ""}`}
                     >
-                      <Trash2 className="size-4" />
+                      {isConfirmingDelete ? "Supprimer ?" : <Trash2 className="size-4" />}
                     </Button>
                   </div>
                 </CardHeader>
-                <CardContent className="space-y-3 text-sm text-slate-600">
-                  <div className="flex flex-wrap items-center gap-3">
-                    <span>
-                      Creee le {format(new Date(todo.createdAt), "dd MMM yyyy HH:mm", { locale: fr })}
+                <CardContent className="space-y-2.5 text-sm text-slate-500">
+                  <div className="flex flex-wrap items-center gap-2 pl-6">
+                    <span className="text-xs">
+                      {format(new Date(todo.createdAt), "dd MMM yyyy HH:mm", { locale: fr })}
                     </span>
                     {todo.dueDate ? (
-                      <Badge variant="outline">
+                      <Badge variant="outline" className="text-xs">
                         Echeance {format(new Date(todo.dueDate), "dd MMM yyyy", { locale: fr })}
                       </Badge>
                     ) : null}
                   </div>
 
-                  <div className="grid gap-3 sm:grid-cols-2">
-                    <div className="grid gap-1">
-                      <Label>Statut</Label>
-                      <select
-                        aria-label={`Statut de ${todo.title}`}
-                        title={`Statut de ${todo.title}`}
-                        className="h-8 rounded-md border border-input bg-background px-2 text-xs"
-                        value={todo.status}
-                        onChange={(event) => {
-                          void handleUpdateTodo(todo.id, {
-                            status: event.target.value as TodoStatus,
-                          });
-                        }}
-                      >
-                        {todoStatusValues.map((status) => (
-                          <option key={status} value={status}>
-                            {todoStatusLabels[status]}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-
-                    <div className="grid gap-1">
-                      <Label>Priorite</Label>
-                      <select
-                        aria-label={`Priorite de ${todo.title}`}
-                        title={`Priorite de ${todo.title}`}
-                        className="h-8 rounded-md border border-input bg-background px-2 text-xs"
-                        value={todo.priority}
-                        onChange={(event) => {
-                          void handleUpdateTodo(todo.id, {
-                            priority: event.target.value as TodoPriority,
-                          });
-                        }}
-                      >
-                        {todoPriorityValues.map((priority) => (
-                          <option key={priority} value={priority}>
-                            {todoPriorityLabels[priority]}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-                  </div>
-
-                  <div className="space-y-3">
-                    <div className="flex flex-wrap items-center gap-3">
+                  {/* Compact attachment section */}
+                  <div className="space-y-2 pl-6">
+                    <div className="flex flex-wrap items-center gap-2">
                       <Label
                         htmlFor={`attachment-${todo.id}`}
-                        className="inline-flex cursor-pointer items-center gap-2 rounded-md border border-input px-3 py-2 text-sm"
+                        className="inline-flex h-7 cursor-pointer items-center gap-1.5 rounded-md border border-input px-2.5 text-xs transition-colors hover:bg-slate-50"
                       >
-                        <Paperclip className="size-4" />
-                        {isUploadingAttachment ? "Televersement..." : "Joindre un fichier"}
+                        <Paperclip className="size-3.5" />
+                        {isUploadingAttachment ? "Envoi..." : "Joindre"}
                       </Label>
                       <Input
                         id={`attachment-${todo.id}`}
@@ -863,41 +1071,48 @@ export function TodoApp() {
                         }}
                       />
                       {todo.attachment ? (
-                        <div className="flex flex-wrap items-center gap-2 rounded-md bg-slate-100 px-3 py-1.5">
-                          <span className="text-xs font-medium">{todo.attachment.fileName}</span>
-                          <span className="text-xs text-slate-500">{formatAttachmentSize(todo.attachment.size)}</span>
+                        <div className="flex flex-wrap items-center gap-1.5 rounded-md bg-slate-50 px-2.5 py-1">
+                          <Paperclip className="size-3 text-slate-400" />
+                          <span className="text-xs font-medium text-slate-700">{todo.attachment.fileName}</span>
+                          <span className="text-xs text-slate-400">{formatAttachmentSize(todo.attachment.size)}</span>
                           <Button
-                            variant="outline"
+                            variant="ghost"
                             size="sm"
-                            className="h-6 px-2 text-xs"
+                            className="h-5 px-1.5 text-xs"
+                            onClick={() => toggleAttachmentPreview(todo.id)}
+                            aria-label={isAttachmentExpanded ? "Masquer l'apercu" : "Afficher l'apercu"}
+                          >
+                            {isAttachmentExpanded ? <EyeOff className="size-3" /> : <Eye className="size-3" />}
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-5 px-1.5 text-xs"
                             onClick={() => {
                               window.open(attachmentDownloadUrl, "_blank", "noopener,noreferrer");
                             }}
                           >
                             <Download className="size-3" />
-                            Telecharger
                           </Button>
                           <Button
                             variant="ghost"
                             size="sm"
-                            className="h-6 px-2 text-xs"
+                            className="h-5 px-1.5 text-xs text-rose-500 hover:text-rose-700"
                             onClick={() => void handleAttachmentDelete(todo.id)}
                           >
-                            Retirer
+                            <Trash2 className="size-3" />
                           </Button>
                         </div>
-                      ) : (
-                        <span className="text-xs text-slate-500">Aucune piece jointe</span>
-                      )}
+                      ) : null}
                     </div>
 
                     {uploadProgress !== undefined ? (
                       <div className="space-y-1">
-                        <div className="flex items-center justify-between text-xs text-slate-500">
-                          <span>Progression upload</span>
+                        <div className="flex items-center justify-between text-xs text-slate-400">
+                          <span>Upload</span>
                           <span>{uploadProgress}%</span>
                         </div>
-                        <div className="h-2 w-full overflow-hidden rounded-full bg-slate-200">
+                        <div className="h-1.5 w-full overflow-hidden rounded-full bg-slate-200">
                           <div
                             role="progressbar"
                             aria-label={`Progression upload pour ${todo.title}`}
@@ -911,8 +1126,8 @@ export function TodoApp() {
                       </div>
                     ) : null}
 
-                    {todo.attachment ? (
-                      <div className="rounded-md border border-slate-200 bg-white p-2">
+                    {todo.attachment && isAttachmentExpanded ? (
+                      <div className="animate-in fade-in-0 slide-in-from-top-1 rounded-md border border-slate-200 bg-white p-2 duration-200">
                         {attachmentPreviewKind === "image" ? (
                           <object
                             type={todo.attachment.contentType || "image/*"}
@@ -934,7 +1149,7 @@ export function TodoApp() {
 
                         {attachmentPreviewKind === "other" ? (
                           <p className="p-1 text-xs text-slate-500">
-                            Apercu non disponible pour ce type de fichier. Utilisez le bouton Telecharger.
+                            Apercu non disponible pour ce type de fichier.
                           </p>
                         ) : null}
                       </div>

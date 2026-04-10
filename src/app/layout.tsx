@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { Space_Grotesk, Source_Code_Pro } from "next/font/google";
+import { ToastProvider } from "@/components/ui/toast";
 import "./globals.css";
 
 const spaceGrotesk = Space_Grotesk({
@@ -28,7 +29,9 @@ export default function RootLayout({
       className={`${spaceGrotesk.variable} ${sourceCodePro.variable} h-full antialiased`}
     >
       <body className="min-h-full bg-background font-sans text-foreground">
-        {children}
+        <ToastProvider>
+          {children}
+        </ToastProvider>
       </body>
     </html>
   );
