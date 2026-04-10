@@ -64,6 +64,7 @@ jobs:
       AZURE_RESOURCE_GROUP: ${{ secrets.AZURE_RESOURCE_GROUP }}
       AZURE_ACR_NAME: ${{ secrets.AZURE_ACR_NAME }}
       AZURE_WEBAPP_NAME: ${{ secrets.AZURE_WEBAPP_NAME }}
+      AZURE_WEBAPP_SLOT_NAME: ${{ secrets.AZURE_WEBAPP_SLOT_NAME }}
       ACR_LOGIN_SERVER: ${{ secrets.AZURE_ACR_NAME }}.azurecr.io
       IMAGE_TAG: ${{ github.sha }}
 
@@ -95,14 +96,32 @@ jobs:
 
       - name: Configure Web App container
         run: |
-          az webapp config container set \
-            --resource-group "$AZURE_RESOURCE_GROUP" \
-            --name "$AZURE_WEBAPP_NAME" \
-            --docker-custom-image-name "$ACR_LOGIN_SERVER/$IMAGE_REPOSITORY:$IMAGE_TAG" \
-            --docker-registry-server-url "https://$ACR_LOGIN_SERVER"
+          if [ -n "$AZURE_WEBAPP_SLOT_NAME" ]; then
+            echo "Deploying image to slot: $AZURE_WEBAPP_SLOT_NAME"
+            az webapp config container set \
+              --resource-group "$AZURE_RESOURCE_GROUP" \
+              --name "$AZURE_WEBAPP_NAME" \
+              --slot "$AZURE_WEBAPP_SLOT_NAME" \
+              --docker-custom-image-name "$ACR_LOGIN_SERVER/$IMAGE_REPOSITORY:$IMAGE_TAG" \
+              --docker-registry-server-url "https://$ACR_LOGIN_SERVER"
+          else
+            echo "Deploying image to production slot"
+            az webapp config container set \
+              --resource-group "$AZURE_RESOURCE_GROUP" \
+              --name "$AZURE_WEBAPP_NAME" \
+              --docker-custom-image-name "$ACR_LOGIN_SERVER/$IMAGE_REPOSITORY:$IMAGE_TAG" \
+              --docker-registry-server-url "https://$ACR_LOGIN_SERVER"
+          fi
 
       - name: Restart Web App
         run: |
-          az webapp restart \
-            --resource-group "$AZURE_RESOURCE_GROUP" \
-            --name "$AZURE_WEBAPP_NAME"
+          if [ -n "$AZURE_WEBAPP_SLOT_NAME" ]; then
+            az webapp restart \
+              --resource-group "$AZURE_RESOURCE_GROUP" \
+              --name "$AZURE_WEBAPP_NAME" \
+              --slot "$AZURE_WEBAPP_SLOT_NAME"
+          else
+            az webapp restart \
+              --resource-group "$AZURE_RESOURCE_GROUP" \
+              --name "$AZURE_WEBAPP_NAME"
+          fi

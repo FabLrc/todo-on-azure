@@ -80,6 +80,14 @@ Script de fallback region (optionnel):
 ./scripts/provision-with-fallback.sh dev
 ```
 
+Slot de deploiement development (optionnel):
+
+- Utilite: valider une version en conditions cloud (config, secrets, connectivite) sans impacter la prod.
+- Prerequis: plan App Service Standard/Premium (`S1` ou plus).
+- Activation: dans `infra/main.parameters.json`, definir `appServicePlanSkuName` a `S1` (ou superieur) et `enableDevelopmentSlot` a `true`.
+- Nom du slot: parametre `developmentSlotName` (par defaut `development`).
+- CI/CD: definir le secret GitHub `AZURE_WEBAPP_SLOT_NAME` pour deployer le workflow vers ce slot.
+
 ## CI/CD GitHub Actions
 
 Workflow: `.github/workflows/ci-cd.yml`
@@ -95,6 +103,7 @@ Secrets GitHub requis:
 - `AZURE_RESOURCE_GROUP`
 - `AZURE_ACR_NAME`
 - `AZURE_WEBAPP_NAME`
+- `AZURE_WEBAPP_SLOT_NAME` (optionnel, pour deployer sur slot)
 
 ## API
 

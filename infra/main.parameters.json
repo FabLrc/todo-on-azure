@@ -18,7 +18,13 @@
       "value": "latest"
     },
     "appServicePlanSkuName": {
-      "value": "B1"
+      "value": "S1"
+    },
+    "enableDevelopmentSlot": {
+      "value": true
+    },
+    "developmentSlotName": {
+      "value": "development"
     },
     "acrSkuName": {
       "value": "Basic"

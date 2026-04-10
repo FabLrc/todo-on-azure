@@ -18,6 +18,12 @@ param imageTag string = 'latest'
 @description('App Service plan SKU name. Default keeps costs lower for dev.')
 param appServicePlanSkuName string = 'B1'
 
+@description('Enable App Service development slot creation. Requires Standard or Premium plan.')
+param enableDevelopmentSlot bool = false
+
+@description('Development slot name when enabled.')
+param developmentSlotName string = 'development'
+
 @description('ACR SKU name.')
 param acrSkuName string = 'Basic'
 
@@ -38,6 +44,8 @@ param enableCosmosFreeTier bool = false
 
 var safePrefix = toLower(replace(namePrefix, '-', ''))
 var uniqueSuffix = toLower(substring(uniqueString(subscription().subscriptionId, resourceGroup().id, environmentName), 0, 6))
+var supportsDevelopmentSlot = contains(['S1', 'S2', 'S3', 'P1v3', 'P2v3', 'P3v3'], appServicePlanSkuName)
+var createDevelopmentSlot = enableDevelopmentSlot && supportsDevelopmentSlot
 
 var acrName = take('${safePrefix}${environmentName}${uniqueSuffix}acr', 50)
 var storageAccountName = take('${safePrefix}${environmentName}${uniqueSuffix}st', 24)
@@ -95,6 +103,8 @@ module appService './modules/appservice.bicep' = {
     webAppName: webAppName
     location: location
     appServicePlanSkuName: appServicePlanSkuName
+    enableDevelopmentSlot: enableDevelopmentSlot
+    developmentSlotName: developmentSlotName
     acrLoginServer: acr.outputs.loginServer
     imageName: imageName
     imageTag: imageTag
@@ -131,12 +141,32 @@ resource acrPullRoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-
   }
 }
 
+resource acrPullRoleAssignmentDevelopmentSlot 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (createDevelopmentSlot) {
+  name: guid(acrName, webAppName, developmentSlotName, acrPullRoleDefinitionId)
+  scope: acrExisting
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', acrPullRoleDefinitionId)
+    principalId: appService.outputs.developmentSlotPrincipalId
+    principalType: 'ServicePrincipal'
+  }
+}
+
 resource keyVaultSecretsUserRoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   name: guid(keyVaultName, webAppName, keyVaultSecretsUserRoleDefinitionId)
   scope: keyVaultExisting
   properties: {
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', keyVaultSecretsUserRoleDefinitionId)
     principalId: appService.outputs.principalId
+    principalType: 'ServicePrincipal'
+  }
+}
+
+resource keyVaultSecretsUserRoleAssignmentDevelopmentSlot 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (createDevelopmentSlot) {
+  name: guid(keyVaultName, webAppName, developmentSlotName, keyVaultSecretsUserRoleDefinitionId)
+  scope: keyVaultExisting
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', keyVaultSecretsUserRoleDefinitionId)
+    principalId: appService.outputs.developmentSlotPrincipalId
     principalType: 'ServicePrincipal'
   }
 }
@@ -151,10 +181,23 @@ resource storageBlobDataContributorRoleAssignment 'Microsoft.Authorization/roleA
   }
 }
 
+resource storageBlobDataContributorRoleAssignmentDevelopmentSlot 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (createDevelopmentSlot) {
+  name: guid(storageAccountName, webAppName, developmentSlotName, storageBlobDataContributorRoleDefinitionId)
+  scope: storageExisting
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', storageBlobDataContributorRoleDefinitionId)
+    principalId: appService.outputs.developmentSlotPrincipalId
+    principalType: 'ServicePrincipal'
+  }
+}
+
 output webAppName string = appService.outputs.name
 output webAppUrl string = 'https://${appService.outputs.defaultHostName}'
 output webAppResourceId string = appService.outputs.id
 output webAppPrincipalId string = appService.outputs.principalId
+output webAppDevelopmentSlotName string = appService.outputs.developmentSlotName
+output webAppDevelopmentSlotUrl string = appService.outputs.developmentSlotEnabled ? 'https://${appService.outputs.developmentSlotDefaultHostName}' : ''
+output webAppDevelopmentSlotPrincipalId string = appService.outputs.developmentSlotPrincipalId
 
 output acrName string = acr.outputs.name
 output acrLoginServer string = acr.outputs.loginServer
@@ -165,5 +208,6 @@ output storageAccountName string = storage.outputs.name
 output SERVICE_WEB_NAME string = appService.outputs.name
 output SERVICE_WEB_RESOURCE_ID string = appService.outputs.id
 output SERVICE_WEB_IDENTITY_PRINCIPAL_ID string = appService.outputs.principalId
+output SERVICE_WEB_DEVELOPMENT_SLOT_NAME string = appService.outputs.developmentSlotName
 output AZURE_CONTAINER_REGISTRY_NAME string = acr.outputs.name
 output AZURE_CONTAINER_REGISTRY_ENDPOINT string = acr.outputs.loginServer
