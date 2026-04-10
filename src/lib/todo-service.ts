@@ -65,6 +65,17 @@ export async function listTodos(): Promise<TodoItem[]> {
   return todos.map((todo) => normalizeTodo(todo as PersistedTodoItem));
 }
 
+export async function getTodoById(id: string): Promise<TodoItem | null> {
+  const settings = await getAppSettings();
+  const todo = await getTodoByIdFromStore(id, settings.cosmos.partitionKeyValue);
+
+  if (!todo) {
+    return null;
+  }
+
+  return normalizeTodo(todo as PersistedTodoItem);
+}
+
 export async function createTodo(input: unknown): Promise<TodoItem> {
   const data = createTodoSchema.parse(input);
   const settings = await getAppSettings();

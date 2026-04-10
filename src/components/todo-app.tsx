@@ -2,7 +2,7 @@
 
 import { format } from "date-fns";
 import { fr } from "date-fns/locale";
-import { Loader2, Paperclip, Trash2 } from "lucide-react";
+import { Download, Loader2, Paperclip, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { Badge } from "@/components/ui/badge";
@@ -39,6 +39,8 @@ const statusOrder: Record<TodoStatus, number> = {
   done: 4,
 };
 
+type AttachmentPreviewKind = "image" | "pdf" | "other";
+
 function getStatusBadgeClass(status: TodoStatus): string {
   switch (status) {
     case "todo":
@@ -65,6 +67,42 @@ function getPriorityBadgeClass(priority: TodoPriority): string {
     default:
       return "bg-slate-100 text-slate-700";
   }
+}
+
+function formatAttachmentSize(sizeInBytes: number): string {
+  if (sizeInBytes < 1024) {
+    return `${sizeInBytes} B`;
+  }
+
+  const sizeInKb = sizeInBytes / 1024;
+  if (sizeInKb < 1024) {
+    return `${sizeInKb.toFixed(sizeInKb >= 100 ? 0 : 1)} KB`;
+  }
+
+  const sizeInMb = sizeInKb / 1024;
+  return `${sizeInMb.toFixed(sizeInMb >= 100 ? 0 : 1)} MB`;
+}
+
+function inferAttachmentPreviewKind(contentType: string, fileName: string): AttachmentPreviewKind {
+  const normalizedContentType = contentType.toLowerCase();
+  if (normalizedContentType.startsWith("image/")) {
+    return "image";
+  }
+
+  if (normalizedContentType === "application/pdf") {
+    return "pdf";
+  }
+
+  const normalizedFileName = fileName.toLowerCase();
+  if (/(\.jpg|\.jpeg|\.png|\.webp)$/.test(normalizedFileName)) {
+    return "image";
+  }
+
+  if (normalizedFileName.endsWith(".pdf")) {
+    return "pdf";
+  }
+
+  return "other";
 }
 
 interface TodoFormState {
@@ -112,6 +150,8 @@ export function TodoApp() {
   const [showOnlyOverdue, setShowOnlyOverdue] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [uploadProgressByTodoId, setUploadProgressByTodoId] = useState<Record<string, number>>({});
+  const [uploadingTodoIds, setUploadingTodoIds] = useState<Record<string, boolean>>({});
   const [message, setMessage] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
@@ -215,23 +255,92 @@ export function TodoApp() {
   async function handleAttachmentUpload(todoId: string, file: File) {
     setErrorMessage(null);
     setMessage(null);
+    setUploadingTodoIds((previousState) => ({
+      ...previousState,
+      [todoId]: true,
+    }));
+    setUploadProgressByTodoId((previousState) => ({
+      ...previousState,
+      [todoId]: 0,
+    }));
 
     try {
       const formData = new FormData();
       formData.set("file", file);
 
-      const response = await fetch(`/api/todos/${todoId}/attachment`, {
-        method: "POST",
-        body: formData,
+      const updatedTodo = await new Promise<TodoItem>((resolve, reject) => {
+        const request = new XMLHttpRequest();
+        request.open("POST", `/api/todos/${todoId}/attachment`);
+        request.responseType = "json";
+
+        request.upload.onprogress = (event) => {
+          if (!event.lengthComputable) {
+            return;
+          }
+
+          const progress = Math.round((event.loaded / event.total) * 100);
+          setUploadProgressByTodoId((previousState) => ({
+            ...previousState,
+            [todoId]: Math.max(0, Math.min(100, progress)),
+          }));
+        };
+
+        request.onerror = () => {
+          reject(new Error("Impossible d'envoyer le fichier."));
+        };
+
+        request.onabort = () => {
+          reject(new Error("Televersement annule."));
+        };
+
+        request.onload = () => {
+          let payload: { data?: TodoItem; error?: string } = {};
+
+          if (request.response && typeof request.response === "object") {
+            payload = request.response as { data?: TodoItem; error?: string };
+          } else {
+            try {
+              payload = JSON.parse(request.responseText || "{}") as { data?: TodoItem; error?: string };
+            } catch {
+              payload = {};
+            }
+          }
+
+          if (request.status >= 200 && request.status < 300 && payload.data) {
+            resolve(payload.data);
+            return;
+          }
+
+          reject(new Error(payload.error ?? "Impossible d'ajouter la piece jointe."));
+        };
+
+        request.send(formData);
       });
 
-      const updatedTodo = await parseApiResponse<TodoItem>(response);
+      setUploadProgressByTodoId((previousState) => ({
+        ...previousState,
+        [todoId]: 100,
+      }));
       setTodos((previousTodos) =>
         previousTodos.map((existingTodo) => (existingTodo.id === updatedTodo.id ? updatedTodo : existingTodo)),
       );
       setMessage("Piece jointe ajoutee.");
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : "Impossible d'ajouter la piece jointe.");
+    } finally {
+      setUploadingTodoIds((previousState) => {
+        const nextState = { ...previousState };
+        delete nextState[todoId];
+        return nextState;
+      });
+
+      window.setTimeout(() => {
+        setUploadProgressByTodoId((previousState) => {
+          const nextState = { ...previousState };
+          delete nextState[todoId];
+          return nextState;
+        });
+      }, 1000);
     }
   }
 
@@ -629,6 +738,13 @@ export function TodoApp() {
         <div className="grid gap-3">
           {filteredSortedTodos.map((todo) => {
             const isDone = todo.status === "done";
+            const isUploadingAttachment = uploadingTodoIds[todo.id] === true;
+            const uploadProgress = uploadProgressByTodoId[todo.id];
+            const attachmentPreviewUrl = `/api/todos/${todo.id}/attachment`;
+            const attachmentDownloadUrl = `/api/todos/${todo.id}/attachment?download=1`;
+            const attachmentPreviewKind = todo.attachment
+              ? inferAttachmentPreviewKind(todo.attachment.contentType, todo.attachment.fileName)
+              : "other";
 
             return (
               <Card key={todo.id} className="border-slate-200/80">
@@ -721,46 +837,108 @@ export function TodoApp() {
                     </div>
                   </div>
 
-                  <div className="flex flex-wrap items-center gap-3">
-                    <Label
-                      htmlFor={`attachment-${todo.id}`}
-                      className="inline-flex cursor-pointer items-center gap-2 rounded-md border border-input px-3 py-2 text-sm"
-                    >
-                      <Paperclip className="size-4" />
-                      Joindre un fichier
-                    </Label>
-                    <Input
-                      id={`attachment-${todo.id}`}
-                      type="file"
-                      accept="image/jpeg,image/png,image/webp,application/pdf"
-                      className="hidden"
-                      onChange={(event) => {
-                        const selectedFile = event.target.files?.[0];
-                        if (!selectedFile) {
-                          return;
-                        }
+                  <div className="space-y-3">
+                    <div className="flex flex-wrap items-center gap-3">
+                      <Label
+                        htmlFor={`attachment-${todo.id}`}
+                        className="inline-flex cursor-pointer items-center gap-2 rounded-md border border-input px-3 py-2 text-sm"
+                      >
+                        <Paperclip className="size-4" />
+                        {isUploadingAttachment ? "Televersement..." : "Joindre un fichier"}
+                      </Label>
+                      <Input
+                        id={`attachment-${todo.id}`}
+                        type="file"
+                        accept="image/jpeg,image/png,image/webp,application/pdf"
+                        className="hidden"
+                        disabled={isUploadingAttachment}
+                        onChange={(event) => {
+                          const selectedFile = event.target.files?.[0];
+                          if (!selectedFile) {
+                            return;
+                          }
 
-                        void handleAttachmentUpload(todo.id, selectedFile);
-                        event.target.value = "";
-                      }}
-                    />
-                    {todo.attachment ? (
-                      <div className="inline-flex items-center gap-2 rounded-md bg-slate-100 px-3 py-1.5">
-                        <span className="text-xs">
-                          {todo.attachment.fileName} ({Math.ceil(todo.attachment.size / 1024)} KB)
-                        </span>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          className="h-6 px-2 text-xs"
-                          onClick={() => void handleAttachmentDelete(todo.id)}
-                        >
-                          Retirer
-                        </Button>
+                          void handleAttachmentUpload(todo.id, selectedFile);
+                          event.target.value = "";
+                        }}
+                      />
+                      {todo.attachment ? (
+                        <div className="flex flex-wrap items-center gap-2 rounded-md bg-slate-100 px-3 py-1.5">
+                          <span className="text-xs font-medium">{todo.attachment.fileName}</span>
+                          <span className="text-xs text-slate-500">{formatAttachmentSize(todo.attachment.size)}</span>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="h-6 px-2 text-xs"
+                            onClick={() => {
+                              window.open(attachmentDownloadUrl, "_blank", "noopener,noreferrer");
+                            }}
+                          >
+                            <Download className="size-3" />
+                            Telecharger
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-6 px-2 text-xs"
+                            onClick={() => void handleAttachmentDelete(todo.id)}
+                          >
+                            Retirer
+                          </Button>
+                        </div>
+                      ) : (
+                        <span className="text-xs text-slate-500">Aucune piece jointe</span>
+                      )}
+                    </div>
+
+                    {uploadProgress !== undefined ? (
+                      <div className="space-y-1">
+                        <div className="flex items-center justify-between text-xs text-slate-500">
+                          <span>Progression upload</span>
+                          <span>{uploadProgress}%</span>
+                        </div>
+                        <div className="h-2 w-full overflow-hidden rounded-full bg-slate-200">
+                          <div
+                            role="progressbar"
+                            aria-label={`Progression upload pour ${todo.title}`}
+                            aria-valuemin={0}
+                            aria-valuemax={100}
+                            aria-valuenow={uploadProgress}
+                            className="h-full rounded-full bg-sky-500 transition-[width] duration-200"
+                            style={{ width: `${uploadProgress}%` }}
+                          />
+                        </div>
                       </div>
-                    ) : (
-                      <span className="text-xs text-slate-500">Aucune piece jointe</span>
-                    )}
+                    ) : null}
+
+                    {todo.attachment ? (
+                      <div className="rounded-md border border-slate-200 bg-white p-2">
+                        {attachmentPreviewKind === "image" ? (
+                          <object
+                            type={todo.attachment.contentType || "image/*"}
+                            data={attachmentPreviewUrl}
+                            className="max-h-60 w-full rounded-md object-contain"
+                            aria-label={`Apercu image de ${todo.attachment.fileName}`}
+                          >
+                            <p className="p-2 text-xs text-slate-500">Apercu image indisponible.</p>
+                          </object>
+                        ) : null}
+
+                        {attachmentPreviewKind === "pdf" ? (
+                          <iframe
+                            src={attachmentPreviewUrl}
+                            title={`Apercu PDF de ${todo.attachment.fileName}`}
+                            className="h-72 w-full rounded-md border border-slate-200"
+                          />
+                        ) : null}
+
+                        {attachmentPreviewKind === "other" ? (
+                          <p className="p-1 text-xs text-slate-500">
+                            Apercu non disponible pour ce type de fichier. Utilisez le bouton Telecharger.
+                          </p>
+                        ) : null}
+                      </div>
+                    ) : null}
                   </div>
                 </CardContent>
               </Card>
