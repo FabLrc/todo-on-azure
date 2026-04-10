@@ -1,0 +1,42 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "location": {
+      "value": "${AZURE_LOCATION}"
+    },
+    "environmentName": {
+      "value": "${AZURE_ENV_NAME}"
+    },
+    "namePrefix": {
+      "value": "todoazure"
+    },
+    "imageName": {
+      "value": "todo-on-azure"
+    },
+    "imageTag": {
+      "value": "latest"
+    },
+    "appServicePlanSkuName": {
+      "value": "B1"
+    },
+    "acrSkuName": {
+      "value": "Basic"
+    },
+    "cosmosDatabaseName": {
+      "value": "todoapp"
+    },
+    "cosmosContainerName": {
+      "value": "todos"
+    },
+    "cosmosPartitionKeyValue": {
+      "value": "todo-app"
+    },
+    "storageContainerName": {
+      "value": "todo-attachments"
+    },
+    "enableCosmosFreeTier": {
+      "value": false
+    }
+  }
+}

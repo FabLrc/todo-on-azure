@@ -1,0 +1,16 @@
+# Dependencies
+node_modules
+.pnpm-store
+
+# Build output
+.next
+out
+
+# Local env and editor files
+.env*
+!.env.example
+.vscode
+
+# Version control and docs
+.git
+.gitignore

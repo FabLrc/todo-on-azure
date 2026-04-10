@@ -1,0 +1,15 @@
+name: todo-on-azure
+metadata:
+  template: todo-on-azure@0.1.0
+
+infra:
+  provider: bicep
+  path: infra
+
+services:
+  web:
+    project: .
+    language: ts
+    host: appservice
+    config:
+      packageManager: pnpm
